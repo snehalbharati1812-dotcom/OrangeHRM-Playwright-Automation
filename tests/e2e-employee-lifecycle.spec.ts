@@ -15,7 +15,7 @@ test('Full Employee Lifecycle: Login -> Add -> Search -> Update -> API Check -> 
 
   const dynamicEmployeeId = `EMP${Date.now().toString().slice(-6)}`;
   
-  // Directly point to the test asset relative to project root
+  // Path relative to execution root
   const profilePicPath = './test-assets/profile.jpg';
   const updatedOtherId = 'OTH-9988';
 
@@ -58,14 +58,24 @@ test('Full Employee Lifecycle: Login -> Add -> Search -> Update -> API Check -> 
   await employeeDetailsPage.searchByEmployeeId(dynamicEmployeeId);
   await employeeDetailsPage.deleteEmployee();
 
-  // Re-verify deletion via API query
-  const postDeleteApiResponse = await page.request.get(
-    `https://opensource-demo.orangehrmlive.com/web/index.php/api/v2/pim/employees?employeeId=${dynamicEmployeeId}`
-  );
-  const postDeleteResponseBody = await postDeleteApiResponse.json();
-  expect(postDeleteResponseBody.data.length, 'Deleted employee should no longer exist in API data').toBe(0);
+  // 6. Re-verify deletion via API query with polling auto-retry
+  await expect.poll(async () => {
+    const postDeleteApiResponse = await page.request.get(
+      `https://opensource-demo.orangehrmlive.com/web/index.php/api/v2/pim/employees?employeeId=${dynamicEmployeeId}`
+    );
+    const postDeleteResponseBody = await postDeleteApiResponse.json();
+    
+    // Log remaining matching records for debugging
+    console.log(`API returned ${postDeleteResponseBody.data.length} record(s) for employeeId: ${dynamicEmployeeId}`);
+    
+    return postDeleteResponseBody.data.length;
+  }, {
+    message: 'Deleted employee should no longer exist in API data',
+    intervals: [1000, 2000],
+    timeout: 10000,
+  }).toBe(0);
 
-  // 6. Logout
+  // 7. Logout
   await employeeDetailsPage.logout();
   await expect(page, 'User should be redirected to Login page after logout').toHaveURL(/.*auth\/login/);
 });
