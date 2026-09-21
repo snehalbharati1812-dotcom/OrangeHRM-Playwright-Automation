@@ -14,7 +14,9 @@ test('Add new employee with dynamic ID and profile picture', async ({ page }) =>
 
   // Generate dynamic unique Employee ID
   const dynamicEmployeeId = `EMP${Date.now().toString().slice(-6)}`;
-  const profilePicPath = path.join(__dirname, '../test-assets/profile.jpg');
+  
+  // Resolve profile picture path relative to project root
+  const profilePicPath = path.resolve(process.cwd(), 'test-assets/profile.jpg');
 
   // 1. Log in
   await loginPage.navigateToLoginPage();
