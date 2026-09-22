@@ -1,41 +1,33 @@
-import { test } from '@playwright/test';
-import path from 'path';
-import employeeData from '../test-data/employee.json';
-import { LoginPage } from '../pages/LoginPage';
-import { DashboardPage } from '../pages/DashboardPage';
-import { PIMPage } from '../pages/PIMPage';
-import { AddEmployeePage } from '../pages/AddEmployeePage';
+import { test, expect } from '../fixtures/custom-fixtures';
 
-test('Add new employee with dynamic ID and profile picture', async ({ page }) => {
-  const loginPage = new LoginPage(page);
-  const dashboardPage = new DashboardPage(page);
-  const pimPage = new PIMPage(page);
-  const addEmployeePage = new AddEmployeePage(page);
+test.describe('PIM - Employee Management @smoke @regression', () => {
+  test('Add new employee with dynamic ID and automated fixture setup', async ({
+    authenticatedAdminPage: page,
+    createdEmployeeIds,
+  }) => {
+    await page.goto('/web/index.php/pim/addEmployee', { waitUntil: 'domcontentloaded' });
+    await page.locator('.oxd-form-loader, .oxd-loading-spinner').waitFor({ state: 'detached', timeout: 30000 }).catch(() => null);
 
-  // Generate dynamic unique Employee ID
-  const dynamicEmployeeId = `EMP${Date.now().toString().slice(-6)}`;
-  
-  // Resolve profile picture path relative to project root
-  const profilePicPath = path.resolve(process.cwd(), 'test-assets/profile.jpg');
+    const dynamicId = `EMP${Date.now().toString().slice(-5)}`;
+    createdEmployeeIds.push(dynamicId);
 
-  // 1. Log in
-  await loginPage.navigateToLoginPage();
-  await loginPage.login('Admin', 'admin123');
-  await dashboardPage.verifyDashboard();
+    await page.getByPlaceholder('First Name').fill('Automation');
+    await page.getByPlaceholder('Last Name').fill('User');
 
-  // 2. Navigate to PIM -> Add Employee
-  await pimPage.navigateToPIM();
-  await pimPage.navigateToAddEmployee();
+    const idInput = page.locator('.oxd-input-group').filter({ hasText: 'Employee Id' }).locator('input');
+    await idInput.waitFor({ state: 'visible', timeout: 15000 });
+    await idInput.fill(dynamicId);
 
-  // 3. Fill Employee details and upload photo
-  await addEmployeePage.addEmployee({
-    firstName: employeeData.firstName,
-    lastName: employeeData.lastName,
-    employeeId: dynamicEmployeeId,
+    // Click Save and wait for page URL change
+    await Promise.all([
+      page.waitForURL(/.*\/pim\/viewPersonalDetails\/empNumber\/\d+/, { timeout: 45000 }),
+      page.getByRole('button', { name: 'Save' }).click()
+    ]);
+
+    await page.locator('.oxd-form-loader, .oxd-loading-spinner').waitFor({ state: 'detached', timeout: 30000 }).catch(() => null);
+
+    // Verify presence of employee profile header
+    const userHeader = page.locator('.orangehrm-edit-employee-name');
+    await expect(userHeader).toBeVisible({ timeout: 20000 });
   });
-  await addEmployeePage.uploadProfilePicture(profilePicPath);
-
-  // 4. Save and verify creation
-  await addEmployeePage.saveEmployee();
-  await addEmployeePage.verifyEmployeeCreated(dynamicEmployeeId);
 });

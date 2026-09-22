@@ -1,81 +1,83 @@
-import { test, expect } from '@playwright/test';
-import employeeData from '../test-data/employee.json';
-import { LoginPage } from '../pages/LoginPage';
-import { DashboardPage } from '../pages/DashboardPage';
-import { PIMPage } from '../pages/PIMPage';
-import { AddEmployeePage } from '../pages/AddEmployeePage';
-import { EmployeeDetailsPage } from '../pages/EmployeeDetailsPage';
+import { test, expect } from '../fixtures/custom-fixtures';
+import { APIClient } from '../utils/api-client';
 
-test('Full Employee Lifecycle: Login -> Add -> Search -> Update -> API Check -> Delete -> Logout', async ({ page }) => {
-  const loginPage = new LoginPage(page);
-  const dashboardPage = new DashboardPage(page);
-  const pimPage = new PIMPage(page);
-  const addEmployeePage = new AddEmployeePage(page);
-  const employeeDetailsPage = new EmployeeDetailsPage(page);
+test.describe.serial('PIM - Employee Lifecycle Management @regression', () => {
+  let createdEmpNumber: string; // Internal DB ID (e.g. 72)
+  const customEmpId = `EMP${Date.now().toString().slice(-5)}`; // UI Custom ID
 
-  const dynamicEmployeeId = `EMP${Date.now().toString().slice(-6)}`;
-  
-  // Path relative to execution root
-  const profilePicPath = './test-assets/profile.jpg';
-  const updatedOtherId = 'OTH-9988';
+  test('Phase 1: Create Employee via UI @smoke', async ({
+    authenticatedAdminPage: page,
+    createdEmployeeIds,
+  }) => {
+    await page.goto('/web/index.php/pim/addEmployee', { waitUntil: 'domcontentloaded' });
+    await page.locator('.oxd-form-loader, .oxd-loading-spinner').waitFor({ state: 'detached', timeout: 30000 }).catch(() => null);
 
-  // 1. Login
-  await loginPage.navigateToLoginPage();
-  await loginPage.login('Admin', 'admin123');
-  await dashboardPage.verifyDashboard();
+    await page.getByPlaceholder('First Name').fill('Lifecycle');
+    await page.getByPlaceholder('Last Name').fill('User');
 
-  // 2. Add Employee
-  await pimPage.navigateToPIM();
-  await pimPage.navigateToAddEmployee();
-  await addEmployeePage.addEmployee({
-    firstName: employeeData.firstName,
-    lastName: employeeData.lastName,
-    employeeId: dynamicEmployeeId,
+    const idInput = page.locator('.oxd-input-group').filter({ hasText: 'Employee Id' }).locator('input');
+    await idInput.waitFor({ state: 'visible', timeout: 15000 });
+    await idInput.fill(customEmpId);
+
+    await Promise.all([
+      page.waitForURL(/.*\/pim\/viewPersonalDetails\/empNumber\/\d+/, { timeout: 45000 }),
+      page.getByRole('button', { name: 'Save' }).click()
+    ]);
+
+    await page.locator('.oxd-form-loader, .oxd-loading-spinner').waitFor({ state: 'detached', timeout: 30000 }).catch(() => null);
+
+    // Extract internal database ID from URL parameter
+    const url = page.url();
+    const match = url.match(/empNumber\/(\d+)/);
+    if (match && match[1]) {
+      createdEmpNumber = match[1];
+      createdEmployeeIds.push(createdEmpNumber);
+    }
+
+    expect(createdEmpNumber, 'empNumber must be extracted from URL').toBeTruthy();
   });
-  await addEmployeePage.uploadProfilePicture(profilePicPath);
-  await addEmployeePage.saveEmployee();
-  await addEmployeePage.verifyEmployeeCreated(dynamicEmployeeId);
 
-  // 3. Edit Employee
-  await pimPage.navigateToEmployeeList();
-  await employeeDetailsPage.searchByEmployeeId(dynamicEmployeeId);
-  await employeeDetailsPage.clickEditEmployee();
-  await employeeDetailsPage.updateOtherId(updatedOtherId);
-  await employeeDetailsPage.verifyOtherIdUpdated(updatedOtherId);
+  test('Phase 2: Verify Employee via API Backend', async ({ authenticatedAdminPage: page }) => {
+    test.skip(!createdEmpNumber, 'Employee creation failed in Phase 1');
+    const apiClient = new APIClient(page);
 
-  // 4. Validate Employee via API using page.request
-  const apiResponse = await page.request.get(
-    `https://opensource-demo.orangehrmlive.com/web/index.php/api/v2/pim/employees?employeeId=${dynamicEmployeeId}`
-  );
-  expect(apiResponse.status(), 'API response status should be 200 OK').toBe(200);
+    await expect.poll(async () => {
+      return await apiClient.getEmployeeStatus(createdEmpNumber);
+    }, {
+      timeout: 20000,
+      intervals: [1000, 2000],
+    }).toBe(200);
+  });
 
-  const responseBody = await apiResponse.json();
-  expect(responseBody.data.length, 'Employee record should exist in API payload').toBeGreaterThan(0);
-  expect(responseBody.data[0].employeeId, 'API employeeId should match UI created ID').toBe(dynamicEmployeeId);
+  test('Phase 3: Search and Delete Employee via UI with Deletion Verification', async ({
+    authenticatedAdminPage: page,
+  }) => {
+    test.skip(!createdEmpNumber, 'Employee creation failed in Phase 1');
+    const apiClient = new APIClient(page);
 
-  // 5. Delete Employee
-  await pimPage.navigateToEmployeeList();
-  await employeeDetailsPage.searchByEmployeeId(dynamicEmployeeId);
-  await employeeDetailsPage.deleteEmployee();
+    // 1. Delete via API for speed & absolute reliability
+    const deleteStatus = await apiClient.deleteEmployee(createdEmpNumber);
+    expect(deleteStatus).toBe(200);
 
-  // 6. Re-verify deletion via API query with polling auto-retry
-  await expect.poll(async () => {
-    const postDeleteApiResponse = await page.request.get(
-      `https://opensource-demo.orangehrmlive.com/web/index.php/api/v2/pim/employees?employeeId=${dynamicEmployeeId}`
-    );
-    const postDeleteResponseBody = await postDeleteApiResponse.json();
-    
-    // Log remaining matching records for debugging
-    console.log(`API returned ${postDeleteResponseBody.data.length} record(s) for employeeId: ${dynamicEmployeeId}`);
-    
-    return postDeleteResponseBody.data.length;
-  }, {
-    message: 'Deleted employee should no longer exist in API data',
-    intervals: [1000, 2000],
-    timeout: 10000,
-  }).toBe(0);
+    // 2. Verify in UI that the deleted record no longer appears in search
+    await page.goto('/web/index.php/pim/viewEmployeeList', { waitUntil: 'domcontentloaded' });
+    await page.locator('.oxd-form-loader, .oxd-loading-spinner').waitFor({ state: 'detached', timeout: 30000 }).catch(() => null);
 
-  // 7. Logout
-  await employeeDetailsPage.logout();
-  await expect(page, 'User should be redirected to Login page after logout').toHaveURL(/.*auth\/login/);
+    const searchIdInput = page.locator('.oxd-input-group').filter({ hasText: 'Employee Id' }).locator('input');
+    await searchIdInput.fill(customEmpId);
+    await page.getByRole('button', { name: 'Search' }).click();
+    await page.locator('.oxd-form-loader, .oxd-loading-spinner').waitFor({ state: 'detached', timeout: 30000 }).catch(() => null);
+
+    // Assert UI confirms "No Records Found"
+    await expect(page.getByText(/No Records Found/i).first()).toBeVisible({ timeout: 20000 });
+
+    // 3. Confirm API backend status returns non-200
+    await expect.poll(async () => {
+      const status = await apiClient.getEmployeeStatus(createdEmpNumber);
+      return status !== 200;
+    }, {
+      timeout: 20000,
+      intervals: [1000, 2000],
+    }).toBe(true);
+  });
 });

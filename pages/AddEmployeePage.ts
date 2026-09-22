@@ -1,58 +1,53 @@
 import { Page, Locator, expect } from '@playwright/test';
+import path from 'path';
 
 export class AddEmployeePage {
   readonly page: Page;
   readonly firstNameInput: Locator;
   readonly lastNameInput: Locator;
   readonly employeeIdInput: Locator;
+  readonly fileInput: Locator;
   readonly saveButton: Locator;
-  readonly formLoader: Locator;
-  readonly profilePicInput: Locator;
+  readonly successToast: Locator;
 
   constructor(page: Page) {
     this.page = page;
-    this.firstNameInput = page.getByPlaceholder('First Name');
-    this.lastNameInput = page.getByPlaceholder('Last Name');
-    this.employeeIdInput = page
-      .locator('.oxd-input-group')
-      .filter({ hasText: 'Employee Id' })
-      .locator('input');
-
-    this.saveButton = page.getByRole('button', { name: 'Save' });
-    this.formLoader = page.locator('.oxd-form-loader');
-    this.profilePicInput = page.locator('input[type="file"]');
+    this.firstNameInput = page.locator('input[name="firstName"]');
+    this.lastNameInput = page.locator('input[name="lastName"]');
+    this.employeeIdInput = page.locator('.oxd-grid-2 input.oxd-input');
+    // Selector targets the actual hidden file input in OrangeHRM
+    this.fileInput = page.locator('input[type="file"]');
+    this.saveButton = page.locator('button[type="submit"]');
+    this.successToast = page.locator('.oxd-toast-content');
   }
 
-  async addEmployee(details: { firstName: string; lastName: string; employeeId: string }): Promise<void> {
-    await this.firstNameInput.fill(details.firstName);
-    await this.lastNameInput.fill(details.lastName);
+  async uploadProfilePicture(relativeFilePath: string): Promise<void> {
+    const absolutePath = path.resolve(process.cwd(), relativeFilePath);
+    
+    // Attach file directly to input element
+    await this.fileInput.setInputFiles(absolutePath);
+    
+    // Wait briefly for the file upload preview thumbnail to render
+    await this.page.waitForTimeout(1000);
+  }
 
+  async createEmployee(firstName: string, lastName: string, empId: string, imagePath?: string): Promise<void> {
+    await this.firstNameInput.fill(firstName);
+    await this.lastNameInput.fill(lastName);
+    
+    // Clear and fill dynamic employee ID
     await this.employeeIdInput.click();
-    await this.employeeIdInput.clear();
-    await this.employeeIdInput.fill(details.employeeId);
-  }
+    await this.page.keyboard.press('Control+A');
+    await this.page.keyboard.press('Backspace');
+    await this.employeeIdInput.fill(empId);
 
-  async enterEmployeeDetails(firstName: string, lastName: string, employeeId: string): Promise<void> {
-    await this.addEmployee({ firstName, lastName, employeeId });
-  }
+    if (imagePath) {
+      await this.uploadProfilePicture(imagePath);
+    }
 
-  async uploadProfilePicture(filePath: string): Promise<void> {
-    await this.profilePicInput.setInputFiles(filePath);
-  }
-
-  async saveEmployee(): Promise<void> {
-    await this.formLoader.waitFor({ state: 'detached' }).catch(() => {});
-    await this.saveButton.waitFor({ state: 'visible' });
     await this.saveButton.click();
-    await this.formLoader.waitFor({ state: 'detached' }).catch(() => {});
-  }
 
-  async verifyEmployeeCreated(employeeId: string): Promise<void> {
-    await this.page.waitForURL('**/pim/viewPersonalDetails/empNumber/**', { timeout: 15000 });
-    await this.formLoader.waitFor({ state: 'detached' }).catch(() => {});
-
-    await expect(
-      this.page.locator('.oxd-input-group').filter({ hasText: 'Employee Id' }).locator('input')
-    ).toHaveValue(employeeId, { timeout: 10000 });
+    // Verify success toast appears instead of static timeout
+    await expect(this.successToast).toBeVisible({ timeout: 20000 });
   }
 }
